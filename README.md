@@ -306,3 +306,30 @@ verification, failover testing and deployment are pending.
 
 Developed as part of the LYFTR AI Full Stack Developer
 Hiring Assignment.
+
+## Deployment Links
+
+- Frontend: https://lyftr-ai-chatbot-gules.vercel.app/
+- Backend: https://lyftr-ai-chatbot-ocyw.onrender.com
+- Health API: https://lyftr-ai-chatbot-ocyw.onrender.com/health
+- GitHub: https://github.com/poorviarora05/LYFTR-AI-Chatbot
+
+## Testing Results
+
+All 11 automated tests passed.
+
+- API health and request validation
+- Session not found handling
+- Provider failure handling
+- Mocked successful response
+- Mocked key failover
+- Mocked cache metadata
+- Token usage extraction
+
+## Known Limitations
+
+- The configured LLM provider currently returns HTTP 404.
+- Live inference and actual cache hits remain unverified.
+- Successful failover is verified using mocked responses.
+- Render free-tier storage is not persistent across restarts.
+- Free-tier hosting may experience cold-start delays.
