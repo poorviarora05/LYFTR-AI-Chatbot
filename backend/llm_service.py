@@ -14,18 +14,23 @@ logger = logging.getLogger(__name__)
 litellm.suppress_debug_info = True
 litellm.set_verbose = False
 
-# Load API keys from environment variables
+
+# Load API keys
 API_KEYS = [
     key.strip()
     for key in os.getenv("LLM_API_KEYS", "").split(",")
     if key.strip()
 ]
 
+
+# Load model configuration
 MODEL = os.getenv(
     "LLM_MODEL",
     "gemini/gemini-2.5-flash"
-)
+).strip()
 
+
+# Enable failure simulation
 ENABLE_FAILURE_SIMULATION = (
     os.getenv(
         "ENABLE_FAILURE_SIMULATION",
@@ -33,13 +38,16 @@ ENABLE_FAILURE_SIMULATION = (
     ).lower() == "true"
 )
 
+
+# Default system prompt
 DEFAULT_SYSTEM_PROMPT = (
     "You are a helpful AI assistant. "
     "Provide clear, accurate and concise answers. "
     "Remember the context of the conversation."
 )
 
-# Enable LiteLLM built-in response cache
+
+# Enable LiteLLM built-in cache
 litellm.cache = Cache(type="local")
 
 
@@ -52,18 +60,21 @@ def get_key_count():
 
 
 def parse_failure_header(header):
+
     failures = {}
 
     if not ENABLE_FAILURE_SIMULATION or not header:
         return failures
 
     for item in header.split(","):
+
         try:
             key_id, status = item.strip().split("=")
             status = int(status)
+            key_id = key_id.strip()
 
             if status in [429, 500, 502, 503]:
-                failures[key_id.strip()] = status
+                failures[key_id] = status
 
         except ValueError:
             continue
@@ -80,6 +91,8 @@ def generate_response(messages, failure_header=None):
     fallback_attempts = 0
 
     if not API_KEYS:
+        logger.error("No API credentials configured")
+
         raise AllProvidersUnavailable(
             "all providers unavailable"
         )
@@ -88,13 +101,14 @@ def generate_response(messages, failure_header=None):
 
         key_id = f"key_{index + 1}"
 
-        # Simulate provider failure for testing
+        # Check simulated failures
         simulated_status = failures.get(
             key_id,
             failures.get("*")
         )
 
         if simulated_status:
+
             fallback_attempts += 1
 
             logger.warning(
@@ -107,7 +121,12 @@ def generate_response(messages, failure_header=None):
 
         try:
 
-            # Generate response using LiteLLM
+            logger.info(
+                "Attempting inference with %s",
+                key_id
+            )
+
+            # Generate response through LiteLLM
             response = litellm.completion(
                 model=MODEL,
                 messages=messages,
@@ -126,10 +145,17 @@ def generate_response(messages, failure_header=None):
             reply = response.choices[0].message.content
 
             if not reply or not reply.strip():
+
                 fallback_attempts += 1
+
+                logger.warning(
+                    "%s returned an empty response",
+                    key_id
+                )
+
                 continue
 
-            # Detect LiteLLM cache hit
+            # Detect cache hit
             hidden_params = (
                 getattr(response, "_hidden_params", {})
                 or {}
@@ -139,7 +165,7 @@ def generate_response(messages, failure_header=None):
                 hidden_params.get("cache_hit", False)
             )
 
-            # Extract per-request token usage
+            # Extract token usage
             usage = getattr(response, "usage", None)
 
             input_tokens = int(
@@ -150,7 +176,7 @@ def generate_response(messages, failure_header=None):
                 getattr(usage, "completion_tokens", 0) or 0
             )
 
-            # Calculate server response latency
+            # Calculate latency
             latency_ms = int(
                 (time.perf_counter() - start_time) * 1000
             )
@@ -179,6 +205,13 @@ def generate_response(messages, failure_header=None):
                 )
             }
 
+            logger.info(
+                "Response successful | Source: %s | "
+                "Latency: %s ms",
+                metadata["resolution_source"],
+                latency_ms
+            )
+
             return {
                 "reply": reply,
                 "metadata": metadata
@@ -188,18 +221,63 @@ def generate_response(messages, failure_header=None):
 
             fallback_attempts += 1
 
-            # Log only the exception type, never API keys
+            status_code = getattr(
+                error,
+                "status_code",
+                "unknown"
+            )
+
             logger.warning(
-    "%s failed: %s | Status: %s | Model: %s",
-    key_id,
-    type(error).__name__,
-    getattr(error, "status_code", "unknown"),
-    MODEL
-)
+                "%s failed: %s | Status: %s | Model: %s",
+                key_id,
+                type(error).__name__,
+                status_code,
+                MODEL
+            )
+
+            provider_response = getattr(
+                error,
+                "response",
+                None
+            )
+
+            if provider_response is not None:
+
+                logger.warning(
+                    "Provider HTTP status: %s",
+                    getattr(
+                        provider_response,
+                        "status_code",
+                        "unknown"
+                    )
+                )
+
+            if status_code == 404:
+
+                logger.error(
+                    "Configured model or provider endpoint "
+                    "could not be found."
+                )
+
+            elif status_code == 401:
+
+                logger.error(
+                    "Provider authentication failed."
+                )
+
+            elif status_code == 429:
+
+                logger.warning(
+                    "Provider rate limit exceeded."
+                )
 
             continue
 
-    # Every configured key has failed
+    logger.error(
+        "All configured providers failed. Attempts: %s",
+        fallback_attempts
+    )
+
     raise AllProvidersUnavailable(
         "all providers unavailable"
     )
